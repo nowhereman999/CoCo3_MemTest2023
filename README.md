@@ -5,7 +5,7 @@ My MemTest2023+ does the following upon startup:
 
 Goes into High Speed and if you have a 6309 go into 6309 native mode to make the RAM access as fast as possible.  Detect the GIME version (for fun) then performs the following RAM tests:
 
-1 - Stack Blast values of 0 to 255 in every byte of RAM and test it by pulling the values off the stack
+1 - Blast bytes - Stack blast values of 0 to 255 in every byte of RAM and compare it by pulling the values off the stack as fast as possible
 
 2 - Walking Ones - Tests all address bits in all memory banks by using a walking ones pattern.
 
