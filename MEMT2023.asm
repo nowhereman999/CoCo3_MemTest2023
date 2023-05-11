@@ -21,6 +21,7 @@
 * Version 1.0
 *
 * Written by Glen Hewlett, have fun with the code :)
+* Assembled with LWASM
 
 SpeedTest 	EQU  1  * 1 = show the border while drawing dots on screen then turn off when done, shows CPU usage
 
