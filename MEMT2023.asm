@@ -961,6 +961,7 @@ CompareLastBlock:
         JMP     DoneTest1       * Return
 BlockTest1:
         JSR     ShowTestBlock
+        LDA     Pattern
         STS     RestoreStack+2  * Save the current Stack pointer
 ;TestWithA:
         TFR     A,B
