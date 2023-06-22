@@ -26,7 +26,10 @@
 *       - Fixed detection code which year the GIME chip was made.  Now does 30 vsyncs after the FIRQ countdown timer is started and gets the count
 *         From this value if it's less than 13891 it's an 86 GIME, if it's higher than it's an 87 GIME.
 *
-* Version 1.20
+* Version 0.6 (Version 1.21)
+*       - Doug Masten tweaked the label for the Hitachi 6309, it was previously showing Motorola 6309
+*
+* Version 1.21
 *
 * Written by Glen Hewlett, have fun with the code :)
 * Assembled with LWASM
