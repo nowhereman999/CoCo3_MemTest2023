@@ -18,12 +18,22 @@
 *         the pattern until it becomes almost imperceptible. This test is designed to detect any "bit fade" issues, where the voltage levels
 *         in the memory chips can gradually decay over time, causing errors.
 *
-* Version 1.0
+* Version 0.4 (Version 1.01)
+*       - Just some cosmetic changes, made the background darker and the text white, so it's easier to read
+*
+* Version 0.5 (Version 1.20)
+*       - Fixed detection of 6809/6309 on a 128k CoCo, as it would erase the flag when clearing the screen.  Moved the flag to a better place in RAM
+*       - Fixed detection code which year the GIME chip was made.  Now does 30 vsyncs after the FIRQ countdown timer is started and gets the count
+*         From this value if it's less than 13891 it's an 86 GIME, if it's higher than it's an 87 GIME.
+*
+* Version 1.20
 *
 * Written by Glen Hewlett, have fun with the code :)
 * Assembled with LWASM
 
-SpeedTest 	EQU  1  * 1 = show the border while drawing dots on screen then turn off when done, shows CPU usage
+
+SpeedTest 	EQU     1  * 1 = show the border while drawing dots on screen then turn off when done, shows CPU usage
+RGB_Colours     EQU     1  * 1 = Use RGB colour palette, otherwise we use composite colours, composite in 80 columns looks terrible
 
 * Include CoCo 3 standard hardware pointers
         INCLUDE ./includes/CoCo3_Start.asm
@@ -43,47 +53,33 @@ SpeedTest 	EQU  1  * 1 = show the border while drawing dots on screen then turn 
     opt   cc  * - clear the running subtotal
 * Coco 3 Memory test
 
-
-
 * Memroy test program starts here, first we detect what type of GIME then jump to the rest of the memory testing
-        SETDP   $00
+;DirectPage      EQU     $0E
+
+;        SETDP   DirectPage
         ORG     $0000
 
-ScreenStart:                            * Location for the text screen in memory        
-VSync_Count     FCB     $00,$00
-FIRQ_Count      FCB     $00,$00
-FinalIRQCount   FCB     $00
-Flag6309        FCB     $00     * Equals 1 if it's a 6309, otherwise it's a zero if it's a 6809
-FlagGIME87      FCB     $00     * Equals 1 if it's a '87 GIME, otherwise it's a zero if it's an '86 GIME
+ScreenStart:                            * Location for the text screen in memory
 FIRQ_GimeTest:
-        LDA     FIRQENR           * Re enable the FIRQ
-        INC     FIRQ_Count
+        LDA     FIRQENR         * Re enable the FIRQ
+        INC     FIRQ_Count+1
         BEQ     >
         RTI
-IRQ_Vsync:
-        LDA     IRQENR     	    * Re-enable the VSYNC IRQ, also clear the IRQ que
-        INC     VSync_Count
+!       INC     FIRQ_Count
         RTI
-!
-        ORCC    #$50
-        LDA     VSync_Count
-        CLR     FlagGIME87
-        CMPA    #10
-        BHI     >
-        INC     FlagGIME87
-!
-        JMP     MemTest
 
 GimeTest:
-        ORCC    #%01010000 * Disable the interrupts
-        LDA     High_Speed_Mode     * Make it fast
+        ORCC    #%01010000      * Disable the interrupts
         CLRA
-        TFR     A,DP
+        STA     $FF40           * Turn off drive motor
+        STA     High_Speed_Mode * Put the CoCo 3 in high speed mode
+;        LDA     #DirectPage
+;        TFR     A,DP
 
 * Let's detect the CPU type:
         LDX     #$0100          * X = $0100
         TFR     X,A             * If it's 6809 then A will equal $00, if it's a 6309 then A will now equal $01
-        STA     Flag6309        * 6309 Flag will be $01 if it's a 6309 and a $00 if it's a 6809
+        STA     _Flag6309+1        * 6309 Flag will be $01 if it's a 6309 and a $00 if it's a 6809
         BEQ     >               * If it's a zero then it's a 6809, go draw it
         FCB     $11,$3D,%00000000 * put 6309 in 6809 compatible mode
 !
@@ -93,47 +89,65 @@ GimeTest:
         LDX     #FIRQ_GimeTest          * Enable FIRQ0 - Play no sounds
         STA     FIRQ_Jump_position
         STX     FIRQ_Start_Address      * FIRQ now set to playback no sound, this will be changed when an sound is played
-* Setup and enable the IRQ
-        LDA     #$7E                    * Write the JMP instruction
-        LDX     #IRQ_Vsync              *
-        STA     IRQ_Jump_position       *
-        STX     IRQ_Start_Address       * Point the IRQ to the VSyncIRQ address
 
         LDA     #%11111100              *
         STA     INIT0_Register0         * CoCo 3 Mode, MMU Enabled, GIME IRQ Enabled, GIME FIRQ Enabled, Vector RAM at FEXX enabled, Standard SCS Normal, ROM Map 16k Int, 16k Ext
-        LDA     INIT1_Register1
-        ANDA    #%10011110              * Make sure the Timer is using the slower 63 us mode
+        LDA     #%00100000              * Make sure the Timer is using the faster 279.365 nanosecond timer source
         STA     INIT1_Register1
         LDA     #%00000100              * Alphanumeric,,Decenders enabled, color, 60hz, 011 = 8 lines per char row, 100 = 9 lines per char row
         STA     Video_Mode_Register
-        LDA     #%00001000              * $08
+        LDA     #%00010000              * $08
         STA     IRQENR                  * Enable only the Vertical Border Sync (VBORD) Interrupt
-        LDD     #$0010                  * This is the speed the audio samples will playback at
-        STD     $FF94                   * Set countdown Timer
-        LDA     #%00100000              * $20
-        STA     FIRQENR                 * Enable TIMER FIRQ Interrupt
 
-        CLR     VSync_Count
-        CLR     FIRQ_Count
+        LDD     #$0000
+        STD     FIRQ_Count              * number of Timer counts completed, start at zero
+        STD     FIRQ_Count+1
+        LDA     #%00100000              * $20
+        STA     FIRQENR                 * Enable only TIMER FIRQ Interrupt
+
 * Start FIRQ & IRQ
-        LDA     IRQENR     	* Re-enable the VSYNC IRQ, also clear the IRQ que
-        LDA     FIRQENR         * Re-enable the FIRQ
+* Wait until a vsync occurs so the timing starts right after
+        TST     $FF02
+!       TST     $FF03
+        BPL     <
+        LDD     #$0080                  * This is the value for the countdown of the Timer
+        STD     $FF94                   * Set countdown Timer        
 *                 EFHINZOC
-        ANDCC 	#%10101111      * Enable interrupts
-        BRA     *               * Loop while Interrupts happen
+        ANDCC 	#%10111111      * Enable FIRQ interrupt
+        LDA     FIRQENR         * Re-enable the FIRQ
+        LDB     #30             * Number of vsyncs to do
+VSYNC   TST     $FF02
+!       TST     $FF03
+        BPL     <
+        DECB
+        BNE     VSYNC
+        ORCC    #$50            * Disable the interrupts
+        LDD     FIRQ_Count
+;        STD     $1FFE
+;        STD     $400
+;        BRA     *
+
+        CLR     FlagGIME87      * Clear 87 GIME flag
+        CMPD    #13891          * If it's lower than this value
+        BLO     >               * then it's an '86 GIME leave the flag as zero
+        INC     FlagGIME87      * Set 87 GIME flag to 1
+!
+        JMP     MemTest
 
         ORG     $0E60
 ProgramStart:
-ScreenPOS       FDB   $0000
-
+FIRQ_Count      FDB     $0000
+FlagGIME87      FCB     $00     * Equals 1 if it's a '87 GIME, otherwise it's a zero if it's an '86 GIME
+ScreenPOS       FDB     $0000
 ColorTable:
+        IF RGB_Colours
 * Colour Info        xxRGBrgb
 Black   EQU  $00
         FCB   %00000000         * Black
 LightBlue  EQU  $01
         FCB   %00011011         * LightBlue
 Blue    EQU  $02
-        FCB   %00001001         * Blue
+        FCB   %00000001         * Blue
 Green   EQU  $03
         FCB   %00010111         * LightGreen
 Red     EQU  $04
@@ -144,6 +158,24 @@ LightGrey  EQU  $06
         FCB   %00111000         * LightGrey
 White   EQU  $07
         FCB   %00111111         * White
+        ELSE
+Black   EQU  $00
+        FCB   %00000000         * Black
+LightBlue  EQU  $01
+        FCB   %00011011         * LightBlue
+Blue    EQU  $02
+        FCB   %00011100         * Blue
+Green   EQU  $03
+        FCB   %00010001         * LightGreen
+Red     EQU  $04
+        FCB   %00010110         * LightRed
+Yellow  EQU  $05
+        FCB   %00110100         * Yellow
+White  EQU  $06
+        FCB   %00100000         * White
+White   EQU  $07
+        FCB   %00110000         * White
+        ENDIF
 * Text Attributes
 Blink         EQU   %10000000
 NoBlink       EQU   %00000000
@@ -233,7 +265,7 @@ GetAttribute:
 
 PrintTextatX:
         LDU     ,S++    * U now points at the data, fix the Stack
-        LDB     #NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        LDB     #NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
 !       LDA     ,U+     * A=character from the message, add 1 to the pointer
         BEQ     >       * If A=0 then we reached the end of the text, exit loop
         STD     ,X++    * Write A & B attribute byte to the text screen @ X then add 2 to pointer
@@ -277,7 +309,7 @@ DisplayTestInfo:
 ;        STA     UTNA
 ;        BSR     Printat80               * Do a Print@ on the 80 column screen
 ;        FCB     13,1                    * Where to start printing the text on screen
-;        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+;        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
 ;UTNA:      
 ;        FCB     '8'                     * Place holder
 ;        FCB     $00                     * Termination value
@@ -370,7 +402,7 @@ ShowCycles:
         BEQ     <
 !       ADDA    #'0'
         STA     ,X+
-        LDA     #NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        LDA     #NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         STA     ,X+
         LDA     ,U+
         CMPU    #CycleCounter+7
@@ -380,13 +412,10 @@ ShowCycles:
         STA     TestNumber
         LBRA    DisplayTestInfo         * Keep doing the tests
 
-* We get here after the interrupts have happened the the GIME type has been figured out
+* We get here after the interrupts have happened and the GIME type has been figured out
 MemTest:
         ORCC    #$50            * No Interrupts
         LDS     #StackSpace     * Stack pointer is at the end of unused page (page 1)
-        CLRA
-        STA     $FF40           * Turn off drive motor
-        STA     High_Speed_Mode * Put the CoCo 3 in high speed mode
 
 * Copy Block $38 to Block $00 and then move it to Page 0 so we can test block $00 first
         CLR     MMU_Reg_Bank0_2 * EQU $FFA2   * Page $4000-$5FFF  Bank #2
@@ -423,7 +452,7 @@ MemTest:
 * Bits 4 & 2 seem to control the text mode characters per row (0x0 = 32, 0x1 = 40, 1x0 = 64, 1x1 = 80 characters per row) bit 3 is ignored
         LDA     #%00010101              * Unused,0 Lines per field, HRES210 - Horizonal res= 101 = 80 characters, 01=4 colors 4 pixels per plane
         STA     Vid_Res_Reg             * $FF99
-        LDA     #%00001001              * Blue
+        LDA     #%00000001              * Blue
         STA     Border_Register         * $FF9A border colour for the text or graphics screen
         CLR     $FF9B                   * Not used (Disto 2 Meg Upgrade bank)
         CLR     $FF9C                   * VideoScroll register
@@ -450,7 +479,7 @@ StackSpace:
 !       STD     ,X++
         CMPX    #ScreenStart+160*22
         BNE     <
-* Write to screen MemTest2023+ v1.00
+* Write to screen MemTest2023+ v1.01
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,0                     * Where to start printing the text on screen
         FCB     NoBlink+NoUnderline+Green+Foreground*Black    * Attribute byte = Green background with Black text
@@ -459,15 +488,15 @@ StackSpace:
         FCB     NoBlink+NoUnderline+Green+Foreground*Red    * Attribute byte = Green background with Red text
         FCC     '+'                     * Message
         FCB     $FF                     * Indicate attribute change
-        FCB     NoBlink+NoUnderline+Green+Foreground*Black    * Attribute byte = Blue background with LightGrey text
-        FCN     ' v1.00        '        * Message to write on screen
-
-        LDA     Flag6309        * 6309 Flag will be $01 if it's a 6309 and a $00 if it's a 6809
+        FCB     NoBlink+NoUnderline+Green+Foreground*Black    * Attribute byte = Blue background with White text
+        FCN     ' v1.20        '        * Message to write on screen
+_Flag6309:
+        LDA     #$FF            * 6309 Flag will be $01 if it's a 6309 and a $00 if it's a 6809
         BEQ     Show6809        * If it's a zero then it's a 6809, go draw it
 * We have a 6309 CPU
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,0                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with LightGrey text
         FCN     '|Hitachi 6309     1.79 MHz'    * Message to write on screen, FCN terminates string with a zero
         FCB     $11,$3D,%00000001       * put 6309 in native mode (speed up the tests a little more)
         BRA     >
@@ -475,7 +504,7 @@ Show6809:
 * We have a 6809 CPU
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,0                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '|Motorola 6809    1.79 MHz'    * Message to write on screen, FCN terminates string with a zero
 !
 * Let's display the type of GIME that is in this CoCo 3
@@ -483,13 +512,13 @@ Show6809:
         BEQ     GIME86          * Branch if zero we have an 86 GIME
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,1                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '|1987 GIME Detected'    * Message to write on screen, FCN terminates string with a zero
         BRA     >
 GIME86:
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,1                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '|1986 GIME Detected'    * Message to write on screen, FCN terminates string with a zero
 !
 * Figure out how much RAM this CoCo 3 has
@@ -524,21 +553,21 @@ GIME86:
 Test2Megs:
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,2                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '|Memory  : 2048k'    * Message to write on screen, FCN terminates string with a zero
         LDB     #$FF                    * 2 Meg uses RAM blocks from $00 to $FF
         BRA     >
 Test512k:
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,2                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '|Memory  :  512k'    * Message to write on screen, FCN terminates string with a zero
         LDB     #$3F                    * 512k uses RAM blocks from $00 to $3F
         BRA     >
 Test128k:
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,2                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '|Memory  :  128k'    * Message to write on screen, FCN terminates string with a zero
         LDB     #$0F                    * 128k uses RAM blocks from $00 to $0F
 !
@@ -547,101 +576,101 @@ Test128k:
 
 ;        JSR     Printat80               * Do a Print@ on the 80 column screen
 ;        FCB     0,1                     * Where to start printing the text on screen
-;        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+;        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
 ;        FCN     'Test Number:'          * Message to write on screen, FCN terminates string with a zero
 
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     0,1             * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Cycles through all tests: 0'
 
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,2                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Pattern:'              * Message to write on screen, FCN terminates string with a zero
 
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,3                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Testing:'              * Message to write on screen, FCN terminates string with a zero
 
 * Let's draw memory map
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     4,4                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '8K'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     2,5                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Blocks'
 
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,4                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,5                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 128k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,6                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 256k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,7                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 384k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,8                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Test 1 -    .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 512k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,9                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Test 2 -    .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 640k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,10                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Test 3 -    .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 768k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,11                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Test 4 -    .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 896k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,12                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Test 5 -    .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1024k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     0,13                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'Test 6 -    .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1152k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,14                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1280k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,15                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1408k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,16                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1536k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,17                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1664k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,18                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1792k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,19                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 1920k'
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     12,20                    * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. - 2048k'
 !
         CLR     TestNumber              * Start with the first test
@@ -667,7 +696,7 @@ NextTest:
 DoTest2:
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     9,9                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '??'
         CLR     FirstBlock      * Start at the first block again
         JSR     Copy00to01      * Copy Block $00 to $01 so we can test Block $00 and move page 0 to block $01
@@ -698,7 +727,7 @@ DoTest2:
         BNE     <
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,9             * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'OK'
         JMP     NextTest        * Go do the next test
 
@@ -707,7 +736,7 @@ DoTest2:
 DoTest3:         
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,10            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '??'
         CLR     FirstBlock      * Start at the first block again
         JSR     Copy00to01      * Copy Block $00 to $01 so we can test Block $00 and move page 0 to block $01
@@ -738,7 +767,7 @@ DoTest3:
         BNE     <
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,10            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'OK'
         JMP     NextTest        * Go do the next test
 
@@ -747,7 +776,7 @@ DoTest3:
 DoTest4:      
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,11            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '??'
         CLR     FirstBlock      * Start at the first block again
         JSR     Copy00to01      * Copy Block $00 to $01 so we can test Block $00 and move page 0 to block $01
@@ -778,7 +807,7 @@ DoTest4:
         BNE     <
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,11            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'OK'
         JMP     NextTest        * Go do the next test
 
@@ -786,7 +815,7 @@ DoTest4:
 DoTest5:         
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,12            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '??'
         CLR     FirstBlock      * Start at the first block again
         JSR     Copy00to01      * Copy Block $00 to $01 so we can test Block $00 and move page 0 to block $01
@@ -817,7 +846,7 @@ DoTest5:
         BNE     <
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,12            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'OK'
         JMP     NextTest        * Go do the next test
 
@@ -825,7 +854,7 @@ DoTest5:
 DoTest6:    
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,13            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '??'
         CLR     FirstBlock      * Start at the first block again
         JSR     Copy00to01      * Copy Block $00 to $01 so we can test Block $00 and move page 0 to block $01
@@ -856,7 +885,7 @@ DoTest6:
         BNE     <
         JSR     Printat80       * Do a Print@ on the 80 column screen
         FCB     9,13            * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'OK'
         JMP     NextTest        * Go do the next test
 
@@ -865,7 +894,7 @@ DoTest6:
 DoTest1:
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     9,8                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     '??'
         CLR     Pattern                 * Start with $00
         BRA     FirstTestBlock
@@ -875,7 +904,7 @@ DoneTest1:
         BNE     >
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     9,8                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*LightGrey    * Attribute byte = Blue background with LightGrey text
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
         FCN     'OK'
         JMP     NextTest                * Go do the next test
 
@@ -932,6 +961,7 @@ CompareLastBlock:
         JMP     DoneTest1       * Return
 BlockTest1:
         JSR     ShowTestBlock
+        LDA     Pattern
         STS     RestoreStack+2  * Save the current Stack pointer
 ;TestWithA:
         TFR     A,B
@@ -1402,4 +1432,5 @@ TestNumber      FCB     $00     * The number referring to the type of test being
 CycleCounter    FDB     $0000,$0000,$0000   * Cycle through all the tests counter
 Author          FCC     'Written By: Glen Hewlett, May 11th, 2023'
 ProgramEnd:
+;        END     MemTest
         END     GimeTest
