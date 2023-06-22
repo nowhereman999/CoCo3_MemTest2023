@@ -496,8 +496,8 @@ _Flag6309:
 * We have a 6309 CPU
         JSR     Printat80               * Do a Print@ on the 80 column screen
         FCB     33,0                     * Where to start printing the text on screen
-        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with White text
-        FCN     '|Motorola 6309    1.79 MHz'    * Message to write on screen, FCN terminates string with a zero
+        FCB     NoBlink+NoUnderline+Blue+Foreground*White    * Attribute byte = Blue background with LightGrey text
+        FCN     '|Hitachi 6309     1.79 MHz'    * Message to write on screen, FCN terminates string with a zero
         FCB     $11,$3D,%00000001       * put 6309 in native mode (speed up the tests a little more)
         BRA     >
 Show6809:
