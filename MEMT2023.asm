@@ -492,7 +492,7 @@ StackSpace:
         FCC     '+'                     * Message
         FCB     $FF                     * Indicate attribute change
         FCB     NoBlink+NoUnderline+Green+Foreground*Black    * Attribute byte = Blue background with White text
-        FCN     ' v1.20        '        * Message to write on screen
+        FCN     ' v1.21        '        * Message to write on screen
 _Flag6309:
         LDA     #$FF            * 6309 Flag will be $01 if it's a 6309 and a $00 if it's a 6809
         BEQ     Show6809        * If it's a zero then it's a 6809, go draw it
